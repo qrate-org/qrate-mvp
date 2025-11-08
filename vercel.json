@@ -6,6 +6,10 @@
   "framework": "vite",
   "rewrites": [
     {
+      "source": "/make-server-6d46752d/express/(.*)",
+      "destination": "/api/express/make-server-6d46752d/$1"
+    },
+    {
       "source": "/make-server-6d46752d/(.*)",
       "destination": "/api/$1"
     },

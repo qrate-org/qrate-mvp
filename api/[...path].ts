@@ -53,40 +53,53 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const supabase = getSupabaseClient();
   
   // Parse path - handle both array and string cases
+  // In Vercel, catch-all routes store path segments in req.query.path
   let path: string[] = [];
+  
+  // Method 1: Try req.query.path (standard Vercel catch-all)
   if (req.query.path) {
     if (Array.isArray(req.query.path)) {
       path = req.query.path as string[];
-    } else {
-      path = [req.query.path as string];
+    } else if (typeof req.query.path === 'string') {
+      path = req.query.path.split('/').filter(Boolean);
     }
   }
   
-  // Also try parsing from the URL if path is empty
-  if (path.length === 0 && req.url) {
-    const urlPath = req.url.split('?')[0]; // Remove query string
+  // Method 2: Parse from URL if path is still empty
+  if (path.length === 0) {
+    const url = req.url || '';
+    const urlPath = url.split('?')[0]; // Remove query string
     const segments = urlPath.split('/').filter(Boolean);
-    // Remove 'api' if present
+    
+    // Find 'api' segment and take everything after it
     const apiIndex = segments.indexOf('api');
-    if (apiIndex !== -1) {
+    if (apiIndex !== -1 && apiIndex < segments.length - 1) {
       path = segments.slice(apiIndex + 1);
-    } else {
+    } else if (segments.length > 0) {
+      // If no 'api' found, might be direct path (after rewrite)
       path = segments;
     }
   }
   
-  const route = path.join('/');
+  // Normalize route: remove empty segments, trim, handle trailing slashes
+  const route = path
+    .filter(segment => segment && segment.trim())
+    .map(segment => segment.trim())
+    .join('/')
+    .toLowerCase()
+    .replace(/^\/+|\/+$/g, ''); // Remove leading/trailing slashes
   
-  // Debug logging (can be removed in production)
-  if (process.env.NODE_ENV === 'development') {
-    console.log('API Request:', {
-      method: req.method,
-      url: req.url,
-      path: path,
-      route: route,
-      query: req.query
-    });
-  }
+  // Debug logging (always log to help diagnose issues)
+  console.log('[API Handler] Request Details:', {
+    method: req.method,
+    url: req.url,
+    queryPath: req.query.path,
+    parsedPath: path,
+    normalizedRoute: route || '(empty)',
+    query: Object.keys(req.query),
+    hasBody: !!req.body,
+    contentType: req.headers['content-type']
+  });
 
   try {
     // Health check
@@ -122,17 +135,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
       }
       
-      // Parse body if it's a string (Vercel sometimes passes body as string)
+      // Parse body - Vercel should auto-parse JSON, but handle edge cases
       let body = req.body;
+      if (!body) {
+        // Body might be in raw format, try to read from request
+        return sendError(res, 400, 'Request body is required', {
+          hint: 'Ensure Content-Type is application/json and body contains event data'
+        });
+      }
+      
       if (typeof body === 'string') {
         try {
           body = JSON.parse(body);
         } catch (e) {
-          return sendError(res, 400, 'Invalid JSON in request body');
+          return sendError(res, 400, 'Invalid JSON in request body', {
+            error: e instanceof Error ? e.message : 'Parse error'
+          });
         }
       }
       
-      const { name, theme, description, date, time, location, code } = body || {};
+      if (typeof body !== 'object' || body === null) {
+        return sendError(res, 400, 'Request body must be a JSON object');
+      }
+      
+      const { name, theme, description, date, time, location, code } = body;
 
       if (!name || !theme) {
         return sendError(res, 400, 'Event name and theme are required');
@@ -909,14 +935,45 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // Catch-all for unhandled routes
+    // If route is empty, it might be a root API call
+    if (!route || route === '') {
+      return sendError(res, 404, 'API endpoint not specified', {
+        method: req.method,
+        url: req.url,
+        hint: 'Valid endpoints: /api/health, /api/events (POST), /api/events/:code (GET), etc.',
+      });
+    }
+    
+    // Check if this might be a method mismatch (route exists but wrong method)
+    // Common routes that only support specific methods
+    const routeMethodMap: Record<string, string[]> = {
+      'events': ['POST'],
+      'health': ['GET'],
+      'health/db': ['GET'],
+    };
+    
+    if (routeMethodMap[route]) {
+      const allowedMethods = routeMethodMap[route];
+      if (!allowedMethods.includes(req.method || '')) {
+        return sendError(res, 405, 'Method not allowed', {
+          method: req.method,
+          route: route,
+          allowedMethods: allowedMethods,
+          hint: `This endpoint only supports: ${allowedMethods.join(', ')}`,
+        });
+      }
+    }
+    
     return sendError(res, 404, 'Route not found', {
       method: req.method,
       path: route,
-      hint: 'Check VERCEL_DEPLOYMENT.md for API documentation',
+      url: req.url,
+      hint: 'Check VERCEL_DEPLOYMENT.md for API documentation. Available routes: /api/health, /api/events, etc.',
     });
   } catch (error: any) {
     console.error('API error:', error);
     return sendError(res, 500, 'Internal server error', error.message);
   }
 }
+
 

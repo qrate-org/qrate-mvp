@@ -4,19 +4,9 @@
   "devCommand": "npm run dev",
   "installCommand": "npm install",
   "framework": "vite",
-  "rewrites": [
-    {
-      "source": "/make-server-6d46752d/express/(.*)",
-      "destination": "/api/express/make-server-6d46752d/$1"
-    },
-    {
-      "source": "/make-server-6d46752d/(.*)",
-      "destination": "/api/$1"
-    },
-    {
-      "source": "/(.*)",
-      "destination": "/index.html"
-    }
+  "rewrites":[
+    { "source": "/make-server-6d46752d/:path*", "destination": "/api/:path*" },
+    { "source": "/(.*)", "destination": "/index.html" }
   ],
   "headers": [
     {
